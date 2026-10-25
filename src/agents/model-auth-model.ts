@@ -296,6 +296,10 @@ export async function getApiKeyForModelCore(params: {
   workspaceDir?: string;
   lockedProfile?: boolean;
   forceRefresh?: boolean;
+  signal?: AbortSignal;
+  validateOAuthCredential?: Parameters<
+    typeof resolveApiKeyForProfile
+  >[0]["validateOAuthCredential"];
   credentialPrecedence?: ProviderCredentialPrecedence;
   allowAuthProfileFallback?: boolean;
   skipSetupProviderFallback?: boolean;

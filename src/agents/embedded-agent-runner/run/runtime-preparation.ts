@@ -343,6 +343,8 @@ export async function prepareEmbeddedRunTransport(input: {
     provider,
     modelId,
     state: authState,
+    assertCurrent: input.assertCurrent,
+    signal: params.abortSignal,
     ...(prepareModelForAuthProfile ? { prepareModelForAuthProfile } : {}),
     log,
   });

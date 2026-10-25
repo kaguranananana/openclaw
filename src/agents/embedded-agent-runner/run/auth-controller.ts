@@ -4,6 +4,8 @@ import type { Model } from "../../../llm/types.js";
 import type { ProviderModelRouteAuthRequirement } from "../../../plugin-sdk/provider-model-types.js";
 import {
   attachProviderAuthAuthority,
+  attachProviderRequestAuth,
+  assertProviderAuthAuthority,
   getProviderAuthAuthority,
 } from "../../../plugins/provider-auth-authority.js";
 import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
@@ -16,6 +18,7 @@ import {
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
 import { advanceAuthProfileCandidate } from "../../auth-profiles/advance.js";
+import { hasOAuthIdentity, isSafeToCopyOAuthIdentity } from "../../auth-profiles/oauth-identity.js";
 import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
@@ -34,6 +37,7 @@ import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
 import { applyPreparedRuntimeAuthToModel } from "../../provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-protection.js";
+import { unwrapSecretSentinelsForProviderEgress } from "../../provider-secret-egress.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
@@ -160,6 +164,8 @@ export function createEmbeddedRunAuthController(params: {
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
   authProfileStateMode?: "read-write" | "read-only";
   runId?: string;
+  assertCurrent?: () => void;
+  signal?: AbortSignal;
   provider: string;
   modelId: string;
   state: EmbeddedRunAuthState;
@@ -175,6 +181,7 @@ export function createEmbeddedRunAuthController(params: {
   log: LogLike;
 }) {
   const { state } = params;
+  let requestAuthGeneration: object | undefined;
   // Runtime auth overlays are profile-scoped. Keep the pre-auth model so a
   // later profile cannot inherit an earlier profile's endpoint or headers.
   const baseRuntimeModel = state.models.runtime;
@@ -238,10 +245,10 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const stopRuntimeAuthRefreshTimer = () => {
+    state.runtimeAuthRefreshCancelled = true;
     if (!state.runtimeAuthState) {
       return;
     }
-    state.runtimeAuthRefreshCancelled = true;
     clearRuntimeAuthRefreshTimer();
   };
 
@@ -471,6 +478,7 @@ export function createEmbeddedRunAuthController(params: {
     attemptIndex?: number,
     forceRefresh = false,
   ): Promise<void> => {
+    requestAuthGeneration = undefined;
     const preparedModel = await params.prepareModelForAuthProfile?.(candidate, attemptIndex);
     const apiKeyInfo = await getApiKeyForModelCore({
       model: preparedModel?.runtimeModel ?? state.models.runtime,
@@ -564,6 +572,79 @@ export function createEmbeddedRunAuthController(params: {
       state.runtimeAuthState = null;
     }
     state.lastProfileId = profileId;
+    const generation = {};
+    requestAuthGeneration = generation;
+    const selected = profileId ? params.authStore.profiles[profileId] : undefined;
+    const requestAuth =
+      apiKeyInfo.mode === "oauth" && profileId && selected?.type === "oauth"
+        ? {
+            version: 1 as const,
+            resolve: async ({ signal }: { signal?: AbortSignal }) => {
+              const requestSignal =
+                params.signal && signal
+                  ? AbortSignal.any([params.signal, signal])
+                  : (signal ?? params.signal);
+              const assertCurrent = () => {
+                requestSignal?.throwIfAborted();
+                params.assertCurrent?.();
+                if (state.runtimeAuthRefreshCancelled || requestAuthGeneration !== generation) {
+                  throw new Error("Provider request auth capability is closed.");
+                }
+                params.authProfileBinding?.assertCurrent();
+                assertProviderAuthAuthority(runtimeModel);
+              };
+              assertCurrent();
+              // Deliberately omit the attempt's captured store. The existing owner
+              // re-reads canonical credentials and owns any refresh/rotation.
+              const current = await getApiKeyForModelCore({
+                model: runtimeModel,
+                cfg: params.config,
+                profileId,
+                lockedProfile: true,
+                allowAuthProfileFallback: false,
+                agentDir: params.agentDir,
+                workspaceDir: params.workspaceDir,
+                signal: requestSignal,
+                validateOAuthCredential: (credential) => {
+                  if (
+                    credential.provider !== selected.provider ||
+                    credential.authFlow !== selected.authFlow ||
+                    !isSafeToCopyOAuthIdentity(selected, credential) ||
+                    (!hasOAuthIdentity(selected) && credential.refresh !== selected.refresh)
+                  ) {
+                    throw new Error("Provider request credentials changed account identity.");
+                  }
+                },
+              });
+              assertCurrent();
+              if (current.profileId !== profileId || current.mode !== "oauth" || !current.apiKey) {
+                throw new Error(
+                  "Provider request credentials no longer match the selected OAuth profile.",
+                );
+              }
+              const prepared = await prepareRuntimeAuthForModel({
+                runtimeModel,
+                apiKey: current.apiKey,
+                authMode: current.mode,
+                profileId,
+              });
+              const assertRequestCurrent = () => {
+                assertCurrent();
+                assertProviderAuthAuthority(current);
+              };
+              assertRequestCurrent();
+              const apiKey = prepared?.apiKey ?? current.apiKey;
+              params.authStorage.setRuntimeApiKey(runtimeModel.provider, apiKey);
+              state.apiKeyInfo = current;
+              return {
+                apiKey: unwrapSecretSentinelsForProviderEgress(apiKey, "provider request auth"),
+                assertCurrent: assertRequestCurrent,
+              };
+            },
+          }
+        : undefined;
+    state.models.runtime = attachProviderRequestAuth(state.models.runtime, requestAuth);
+    state.models.effective = attachProviderRequestAuth(state.models.effective, requestAuth);
   };
 
   const advanceAuthProfile = async (): Promise<boolean> => {

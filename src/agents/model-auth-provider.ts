@@ -205,6 +205,9 @@ export async function resolveApiKeyForProviderCore(input: {
    *  silently replaced by another profile or env/config credentials. */
   lockedProfile?: boolean;
   forceRefresh?: boolean;
+  validateOAuthCredential?: Parameters<
+    typeof resolveApiKeyForProfile
+  >[0]["validateOAuthCredential"];
   credentialPrecedence?: ProviderCredentialPrecedence;
   /** Skip implicit profile discovery for a prepared env/config fallback attempt. */
   allowAuthProfileFallback?: boolean;
@@ -338,6 +341,7 @@ export async function resolveApiKeyForProviderCore(input: {
       signal: params.signal,
       forceRefresh: params.forceRefresh,
       allowProfileFallback: !params.lockedProfile,
+      validateOAuthCredential: params.validateOAuthCredential,
     });
     params.signal?.throwIfAborted();
     if (!resolved) {
