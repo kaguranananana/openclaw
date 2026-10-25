@@ -15,6 +15,18 @@ vi.mock("../../../plugins/provider-runtime.js", async (importOriginal) => ({
   prepareProviderRuntimeAuth: mocks.exchangeCredential,
 }));
 
+// This suite substitutes resolution/preparation; canonical lifetime publication is
+// exercised with real stores in auth-controller.request-auth.test.ts.
+vi.mock("../../auth-profiles/authorization.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auth-profiles/authorization.js")>()),
+  captureAuthProfileAuthorization: vi.fn(async () => ({
+    authorizationId: "synthetic-authorization",
+    assertCurrent() {},
+    async revalidate() {},
+    dispose() {},
+  })),
+}));
+
 beforeEach(() => vi.clearAllMocks());
 
 it.each([false, true])(

@@ -205,6 +205,8 @@ export async function resolveApiKeyForProviderCore(input: {
    *  silently replaced by another profile or env/config credentials. */
   lockedProfile?: boolean;
   forceRefresh?: boolean;
+  /** Gates a new native refresh claim, not independently owned settlement. */
+  assertRefreshAdmission?: () => void;
   validateOAuthCredential?: Parameters<
     typeof resolveApiKeyForProfile
   >[0]["validateOAuthCredential"];
@@ -342,6 +344,7 @@ export async function resolveApiKeyForProviderCore(input: {
       forceRefresh: params.forceRefresh,
       allowProfileFallback: !params.lockedProfile,
       validateOAuthCredential: params.validateOAuthCredential,
+      assertRefreshAdmission: params.assertRefreshAdmission,
     });
     params.signal?.throwIfAborted();
     if (!resolved) {

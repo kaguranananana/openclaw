@@ -297,6 +297,8 @@ export async function getApiKeyForModelCore(params: {
   lockedProfile?: boolean;
   forceRefresh?: boolean;
   signal?: AbortSignal;
+  /** Gates a new native refresh claim, not independently owned settlement. */
+  assertRefreshAdmission?: () => void;
   validateOAuthCredential?: Parameters<
     typeof resolveApiKeyForProfile
   >[0]["validateOAuthCredential"];
