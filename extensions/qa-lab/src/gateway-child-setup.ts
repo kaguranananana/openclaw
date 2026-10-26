@@ -566,11 +566,12 @@ export async function prepareQaGatewayChild(
       lifetime.assertOpen();
 
       if (params.initializeCurrentRuntimeState) {
+        const bootstrapEnv = createQaPackagedBootstrapEnv(env);
         await runQaPackagedBootstrap("QA state initialization failed", () =>
           initializeQaGatewayChildState({
             repoRoot: params.repoRoot,
             tempRoot,
-            env: createQaPackagedBootstrapEnv(env),
+            env: bootstrapEnv,
             lifetime,
           }),
         );

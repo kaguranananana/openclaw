@@ -79,7 +79,7 @@ function normalizeFixture(value: unknown, root: string): unknown {
 }
 
 /** Observe closed synthetic fixtures; never initialize, repair, or normalize away readiness. */
-export async function snapshotQaStartupState(env: NodeJS.ProcessEnv) {
+export async function collectQaStartupState(env: NodeJS.ProcessEnv) {
   assert.ok(
     env.OPENCLAW_STATE_DIR && env.OPENCLAW_CONFIG_PATH,
     "Explicit QA fixture paths required",
@@ -207,10 +207,12 @@ export async function snapshotQaStartupState(env: NodeJS.ProcessEnv) {
   for (const agentId of listAgentIds(config.sourceConfig).toSorted()) {
     const pathname = resolveOpenClawAgentSqlitePath({ agentId, env });
     agentCleanClose.push({ agentId, cleanClose: readSqliteDatabaseCleanClose(pathname) });
+    let version: number;
     {
       using native = openNodeSqliteDatabase(pathname, { readOnly: true });
       assertSqliteIntegrity(native, pathname);
       assertOpenClawAgentDatabaseForMaintenance(native, { agentId, pathname });
+      version = readSqliteUserVersion(native);
     }
     const opened = openOpenClawAgentDatabaseReadOnly({ agentId, env, path: pathname });
     assert.ok(opened.found, `Configured agent database missing: ${agentId}`);
@@ -228,7 +230,7 @@ export async function snapshotQaStartupState(env: NodeJS.ProcessEnv) {
       assert.equal(hasPendingCanonicalSessionValidation(database), false);
       agents.push({
         agentId,
-        version: readSqliteUserVersion(database.db),
+        version,
         canonicalReceipt,
         canonicalEntries,
         mainKey: readStoredCanonicalSessionMainKey(database),
