@@ -27,6 +27,7 @@ import {
   getScopedSharedAuthStore,
   isEnvOnlyAuthProfileRuntime,
 } from "../../auth-profiles/runtime-scope.js";
+import { isSetupCredentialAccessible } from "../../auth-profiles/setup-access.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import { classifyFailoverReason } from "../../failover/classify.js";
@@ -35,50 +36,24 @@ import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { resolveProviderModelAuthPolicy } from "../../model-auth-policy.js";
-import {
-  getApiKeyForModelCore,
-  MissingProviderAuthError,
-  type ResolvedProviderAuth,
-} from "../../model-auth.js";
+import { getApiKeyForModelCore, MissingProviderAuthError } from "../../model-auth.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
 import { applyPreparedRuntimeAuthToModel } from "../../provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-protection.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
 import { createEmbeddedRequestAuth } from "./auth-controller.request-auth.js";
+import type { EmbeddedRunAuthState, RuntimeApiKeySink, LogLike } from "./auth-controller.types.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
   RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
   RUNTIME_AUTH_REFRESH_RETRY_MS,
-  type RuntimeAuthState,
 } from "./helpers.js";
-import type { resolveEmbeddedRunEffectiveModel } from "./model-harness.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
-export type EmbeddedRunAuthState = {
-  readonly models: {
-    runtime: Model;
-    effective: ReturnType<typeof resolveEmbeddedRunEffectiveModel>["effectiveModel"];
-  };
-  apiKeyInfo: ResolvedProviderAuth | null;
-  lastProfileId: string | undefined;
-  runtimeAuthState: RuntimeAuthState | null;
-  runtimeAuthRefreshCancelled: boolean;
-  profileIndex: number;
-  thinkLevel: ThinkLevel;
-};
-
-type RuntimeApiKeySink = {
-  setRuntimeApiKey(provider: string, apiKey: string): void;
-};
-
-type LogLike = {
-  debug(message: string): void;
-  info(message: string): void;
-  warn(message: string): void;
-};
+export type { EmbeddedRunAuthState } from "./auth-controller.types.js";
 
 function resolveUnavailableAuthReason(
   store: AuthProfileStore,
@@ -560,7 +535,12 @@ export function createEmbeddedRunAuthController(params: {
     };
     // Keep the canonical account's authorization, not just its rotating bearer.
     // Its existing writer publications retire this handle on reconnect/removal.
-    const requestAuthSupported = !isEnvOnlyAuthProfileRuntime() && !getScopedSharedAuthStore();
+    const setupVerification =
+      profileId &&
+      selected?.setup?.replacement &&
+      isSetupCredentialAccessible({ profileId, credential: selected, agentDir: params.agentDir });
+    const requestAuthSupported =
+      !isEnvOnlyAuthProfileRuntime() && !getScopedSharedAuthStore() && !setupVerification;
     const authorization =
       requestAuthSupported && apiKeyInfo.mode === "oauth" && profileId && selected?.type === "oauth"
         ? await captureAuthProfileAuthorization({

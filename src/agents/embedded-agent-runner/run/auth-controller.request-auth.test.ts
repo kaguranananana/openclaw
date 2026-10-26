@@ -4,133 +4,51 @@ import { createAssistantMessageEventStream } from "../../../llm/utils/event-stre
 import { getProviderRequestAuth } from "../../../plugins/provider-auth-authority.js";
 import * as providerRuntime from "../../../plugins/provider-runtime.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { writeConfigMachineState } from "../../../state/config-machine-state-write.js";
-import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createStageTimingTracker } from "../../../shared/stage-timing.js";
+import {
+  prepareAgentRunAdmission,
+  createOperationalRunInstanceRef,
+} from "../../admitted-run-context.js";
 import * as authorizationOwner from "../../auth-profiles/authorization.js";
-import { oauthCred } from "../../auth-profiles/credential-fixtures.test-support.js";
 import { createOAuthManager } from "../../auth-profiles/oauth-manager.js";
-import { mockOAuthProviderOperations } from "../../auth-profiles/oauth-native-provider.test-support.js";
 import * as profileLock from "../../auth-profiles/oauth-profile-lock.js";
 import { readAuthProfileStoreForTest, storeWith } from "../../auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../auth-profiles/profiles.js";
+import {
+  withSetupCredentialAccess,
+  runOutsideSetupCredentialAccess,
+} from "../../auth-profiles/setup-access.js";
 import { writePersistedAuthProfileStoreRaw } from "../../auth-profiles/sqlite.js";
 import { withAuthProfileStoreAgentDir } from "../../auth-profiles/store.js";
+import * as contextLeaseOwner from "../../harness/context-engine-logical-turn.js";
+import * as contextTurnOwner from "../../harness/context-engine-turn-begin.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
   getApiKeyForModelCore,
 } from "../../model-auth.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
-import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import * as modelResolver from "../model.js";
-import { createEmbeddedRunAuthController, type EmbeddedRunAuthState } from "./auth-controller.js";
+import { createEmbeddedAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
+import { runPreparedEmbeddedLoop } from "../run-loop.js";
+import {
+  provider,
+  profileId,
+  withRequestFixture,
+} from "./auth-controller.request-auth.test-support.js";
+import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import * as modelHarness from "./model-harness.js";
 import * as modelSetup from "./model-setup.js";
+import { createEmbeddedRunProgressController } from "./progress-controller.js";
+import * as dispatchOwner from "./run-attempt-dispatch.js";
 import { prepareEmbeddedRunTransport } from "./runtime-preparation.js";
+import { prepareEmbeddedRunRuntime } from "./runtime.js";
+import * as sessionPromptOwner from "./session-prompt-state.js";
 
-const provider = "request-auth-fixture";
-const profileId = `${provider}:selected`;
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
-
-type RequestFixture = {
-  state: Parameters<Parameters<typeof withOpenClawTestState>[1]>[0];
-  credential: ReturnType<typeof oauthCred>;
-  agentDir: string;
-  controller: ReturnType<typeof createEmbeddedRunAuthController>;
-  authState: EmbeddedRunAuthState;
-  refresh: ReturnType<
-    typeof vi.fn<
-      (credential: ReturnType<typeof oauthCred>) => Promise<ReturnType<typeof oauthCred>>
-    >
-  >;
-  installed(this: void): string;
-};
-async function withRequestFixture(
-  run: (fixture: RequestFixture) => Promise<void>,
-  agentId = "main",
-  sharedStateOwner = false,
-) {
-  await withOpenClawTestState(
-    { layout: "state-only", agentEnv: "main", prefix: "request-auth-" },
-    async (state) => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(1_900_000_000_000);
-      const credential = oauthCred({
-        provider,
-        access: "synthetic-access-before",
-        refresh: "synthetic-refresh-before",
-        expires: Date.now() + 3_600_000,
-        accountId: "account-a",
-      });
-      const store = storeWith(profileId, credential);
-      if (sharedStateOwner) {
-        writeConfigMachineState("auth.sharedStore", { location: "state-db" });
-      }
-      await state.writeAuthProfiles(store, agentId);
-      const agentDir = state.agentDir(agentId);
-      const refresh = vi.fn(async () => ({
-        ...credential,
-        access: "synthetic-access-after",
-        refresh: "synthetic-refresh-after",
-        expires: Date.now() + 3_600_000,
-      }));
-      mockOAuthProviderOperations({ refreshCredential: refresh });
-      const model = makeProviderModelFixture({
-        provider,
-        api: "request-auth-fixture",
-        id: "chat",
-        baseUrl: "https://example.test",
-      });
-      const authState: EmbeddedRunAuthState = {
-        models: { runtime: model, effective: model },
-        apiKeyInfo: null,
-        lastProfileId: undefined,
-        runtimeAuthState: null,
-        runtimeAuthRefreshCancelled: false,
-        profileIndex: 0,
-        thinkLevel: "off",
-      };
-      let installed = "";
-      const controller = createEmbeddedRunAuthController({
-        config: { plugins: { enabled: false } },
-        agentDir,
-        workspaceDir: state.workspaceDir,
-        authStore: store,
-        authStorage: {
-          setRuntimeApiKey: (_provider, key) => {
-            installed = key;
-          },
-        },
-        profileCandidates: [profileId],
-        initialThinkLevel: "off",
-        attemptedThinking: new Set(),
-        fallbackConfigured: false,
-        allowTransientCooldownProbe: false,
-        provider,
-        modelId: model.id,
-        state: authState,
-        log: { debug() {}, info() {}, warn() {} },
-      });
-
-      try {
-        await run({
-          state,
-          credential,
-          agentDir,
-          controller,
-          authState,
-          refresh,
-          installed: () => installed,
-        });
-      } finally {
-        controller.stopRuntimeAuthRefreshTimer();
-      }
-    },
-  );
-}
 
 it("initializes local OAuth in the real bounded agent-exec auth scope without borrowing shared OAuth", async () => {
   await withRequestFixture(
@@ -165,13 +83,61 @@ it("initializes local OAuth in the real bounded agent-exec auth scope without bo
         expect(refresh).not.toHaveBeenCalled();
       });
     },
-    "exec-local",
-    true,
+    { agentId: "exec-local", sharedStateOwner: true },
   );
 });
 
-it.each(["exhausted", "canceled", "post-auth", "returned"] as const)(
-  "disposes actual captured account authorization on %s transport startup",
+it("verifies replacement OAuth only within its exact active setup scope without ambient account capture", async () => {
+  await withRequestFixture(
+    async ({ agentDir, controller, authState, installed, refresh }) => {
+      const resolve = () =>
+        getApiKeyForModelCore({
+          model: authState.models.effective,
+          cfg: { plugins: { enabled: false } },
+          profileId,
+          lockedProfile: true,
+          allowAuthProfileFallback: false,
+          agentDir,
+        });
+      await expect(resolve()).rejects.toThrow();
+      await withSetupCredentialAccess({ profileId: `${provider}:other`, agentDir }, async () => {
+        await expect(resolve()).rejects.toThrow();
+      });
+      await withSetupCredentialAccess({ profileId, agentDir: `${agentDir}-other` }, async () => {
+        await expect(resolve()).rejects.toThrow();
+      });
+      const signal = new AbortController();
+      await withSetupCredentialAccess({ profileId, agentDir, signal: signal.signal }, async () => {
+        await runOutsideSetupCredentialAccess(async () => {
+          await expect(resolve()).rejects.toThrow();
+        });
+        await controller.initializeAuthProfile();
+        expect(installed()).toBe("synthetic-access-before");
+        expect(authState.lastProfileId).toBe(profileId);
+        expect(getProviderRequestAuth(authState.models.effective)).toBeUndefined();
+        signal.abort();
+        await expect(resolve()).rejects.toThrow();
+      });
+      await expect(resolve()).rejects.toThrow();
+      expect(refresh).not.toHaveBeenCalled();
+    },
+    { replacement: true },
+  );
+});
+
+it.each([
+  "exhausted",
+  "canceled",
+  "post-auth",
+  "returned",
+  "admission",
+  "admitted",
+  "session",
+  "context",
+  "context-stage",
+  "execution",
+] as const)(
+  "owns actual captured account authorization through %s startup and handoff",
   async (scenario) => {
     await withRequestFixture(async ({ state, credential, authState }) => {
       if (scenario === "exhausted") {
@@ -239,14 +205,65 @@ it.each(["exhausted", "canceled", "post-auth", "returned"] as const)(
         }
         return undefined;
       });
+      const runId = `startup-${scenario}`;
+      const sessionKey = "agent:main:startup-session";
+      const admission = prepareAgentRunAdmission({
+        cfg: {},
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
+        facts: {
+          runId,
+          agentId: "main",
+          ingress: { kind: "system", boundary: "startup-fixture", state: "present" },
+        },
+        onAdmitted: () => {
+          expect(captures).toHaveLength(1);
+          captures[0]!.handle.assertCurrent();
+          if (scenario === "admission") {
+            throw new Error("fixture runtime admission denied");
+          }
+        },
+      });
+      const leases: contextLeaseOwner.ContextEngineLogicalTurnLease[] = [];
+      const createLease = contextLeaseOwner.createContextEngineLogicalTurnLease;
+      vi.spyOn(contextLeaseOwner, "createContextEngineLogicalTurnLease").mockImplementation(
+        async (input) => {
+          const lease = await createLease(input);
+          leases.push(lease);
+          return lease;
+        },
+      );
+      if (scenario === "session") {
+        vi.spyOn(sessionPromptOwner, "createEmbeddedRunSessionPromptState").mockRejectedValue(
+          new Error("fixture session preparation failed"),
+        );
+      }
+      if (scenario === "context") {
+        vi.spyOn(contextTurnOwner, "beginContextEngineLogicalTurn").mockRejectedValue(
+          new Error("fixture context preparation failed"),
+        );
+      }
+      if (scenario === "execution") {
+        vi.spyOn(dispatchOwner, "prepareAndDispatchEmbeddedRunAttempt").mockImplementation(
+          async () => {
+            captures[0]!.handle.assertCurrent();
+            expect(captures[0]!.dispose).not.toHaveBeenCalled();
+            expect(leases[0]!.disposed).toBe(false);
+            throw new Error("fixture execution reached");
+          },
+        );
+      }
       let runtime: Awaited<ReturnType<typeof prepareEmbeddedRunTransport>> | undefined;
+      let admittedRuntime: Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>> | undefined;
+      const writers: AsyncDisposable[] = [];
       try {
-        const preparing = prepareEmbeddedRunTransport({
+        const transportInput: Parameters<typeof prepareEmbeddedRunTransport>[0] = {
           assertCurrent: () => {},
           runParams: {
-            runId: `startup-${scenario}`,
+            runId,
+            preparedRunAdmission: admission,
+            sessionPersistence: "detached",
             sessionId: "startup-session",
-            sessionKey: "agent:main:startup-session",
+            sessionKey,
             agentId: "main",
             prompt: "Synthetic startup",
             workspaceDir: state.workspaceDir,
@@ -269,17 +286,108 @@ it.each(["exhausted", "canceled", "post-auth", "returned"] as const)(
           },
           notifyExecutionPhase: () => {},
           fallbackConfigured: false,
-        });
-        if (scenario === "returned") {
-          runtime = await preparing;
+        };
+        const loopScenario = ["session", "context", "context-stage", "execution"].includes(
+          scenario,
+        );
+        let preparing: Promise<unknown>;
+        if (loopScenario) {
+          let runParams = { ...transportInput.runParams, sessionFile: "startup-session" };
+          const lifecycleGeneration = "startup-lifecycle";
+          const laneController = createEmbeddedRunLaneController({
+            getLifecycleGeneration: () => lifecycleGeneration,
+            getParams: () => runParams,
+            globalLane: "test",
+            initialQueuedLifecycleGeneration: lifecycleGeneration,
+            setLifecycleGeneration: () => {},
+            setParams: (next) => {
+              runParams = next;
+            },
+          });
+          const refresh = createEmbeddedAgentPluginRuntimeRefresh(runParams);
+          const startupStages = createStageTimingTracker(Date.now);
+          const mark = startupStages.mark;
+          vi.spyOn(startupStages, "mark").mockImplementation((stage) => {
+            if (scenario === "context-stage" && stage === "context-engine") {
+              captures[0]!.handle.assertCurrent();
+              expect(leases[0]!.disposed).toBe(false);
+              throw new Error("fixture context-stage failed");
+            }
+            return mark(stage);
+          });
+          preparing = runPreparedEmbeddedLoop(refresh, {
+            ...transportInput,
+            hookRunner: null,
+            runParams,
+            laneController,
+            lifecycleGeneration,
+            workspaceResolution: {
+              agentId: "main",
+              workspaceDir: state.workspaceDir,
+              isCanonicalWorkspace: true,
+              usedFallback: false,
+            },
+            isCanonicalWorkspace: true,
+            isProbeSession: false,
+            resolvedSessionKey: sessionKey,
+            resolvedToolResultFormat: "markdown",
+            startedAtMs: Date.now(),
+            startupStages,
+            emitStartupStageSummary: () => {},
+            suspendForFailure: () => {},
+            onInitialWriterPrepared: (writer) => {
+              writers.push(writer);
+            },
+            progressController: createEmbeddedRunProgressController({
+              attempt: runParams,
+              noteLaneTaskProgress: () => {},
+              startedAtMs: Date.now(),
+            }),
+          }).finally(() => refresh.close());
+        } else if (scenario === "admission" || scenario === "admitted") {
+          preparing = prepareEmbeddedRunRuntime(transportInput).then((result) => {
+            admittedRuntime = result;
+            return result;
+          });
+        } else {
+          preparing = prepareEmbeddedRunTransport(transportInput).then((result) => {
+            runtime = result;
+            return result;
+          });
+        }
+        if (scenario === "returned" || scenario === "admitted") {
+          await preparing;
           expect(captures).toHaveLength(1);
           expect(captures[0]!.dispose).not.toHaveBeenCalled();
           captures[0]!.handle.assertCurrent();
-          expect(getProviderRequestAuth(runtime.snapshot().effectiveModel)).toBeDefined();
-          runtime.stopRuntimeAuthRefreshTimer();
+          expect(
+            getProviderRequestAuth((admittedRuntime ?? runtime)!.snapshot().effectiveModel),
+          ).toBeDefined();
+          if (admittedRuntime) {
+            await admittedRuntime.releaseTransport();
+          } else {
+            runtime!.stopRuntimeAuthRefreshTimer();
+          }
         } else {
-          await expect(preparing).rejects.toThrow();
+          await expect(preparing).rejects.toThrow(
+            scenario === "admission"
+              ? "fixture runtime admission denied"
+              : scenario === "session"
+                ? "fixture session preparation failed"
+                : scenario === "context"
+                  ? "fixture context preparation failed"
+                  : scenario === "context-stage"
+                    ? "fixture context-stage failed"
+                    : scenario === "execution"
+                      ? "fixture execution reached"
+                      : undefined,
+          );
           expect(captures).toHaveLength(scenario === "exhausted" ? 2 : 1);
+        }
+        expect(writers).toHaveLength(loopScenario && scenario !== "session" ? 1 : 0);
+        expect(leases).toHaveLength(loopScenario && scenario !== "session" ? 1 : 0);
+        for (const lease of leases) {
+          expect(lease.disposed).toBe(true);
         }
         for (const { handle, dispose } of captures) {
           expect(dispose).toHaveBeenCalledOnce();
@@ -287,6 +395,14 @@ it.each(["exhausted", "canceled", "post-auth", "returned"] as const)(
         }
       } finally {
         runtime?.stopRuntimeAuthRefreshTimer();
+        await admittedRuntime?.releaseTransport();
+        for (const writer of writers) {
+          await writer[Symbol.asyncDispose]();
+        }
+        for (const lease of leases) {
+          await lease.dispose();
+        }
+        admission.close();
         // A red run must release its real resources after the assertions, too.
         for (const { handle } of captures) {
           handle.dispose();
