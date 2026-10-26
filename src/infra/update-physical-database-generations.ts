@@ -1,12 +1,74 @@
-import { readBackupEngineImage } from "./database-engine/physical-store.js";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { readBackupEngineImage, type BackupEngine } from "./database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
-import { readUpdateDatabaseGenerationPair } from "./update-database-generations.js";
+import {
+  readUpdateDatabaseGenerationPair,
+  readUpdateDatabaseGenerations,
+} from "./update-database-generations.js";
+
+export function readUpdatePhysicalDatabaseObservation(pathname: string): {
+  engine?: BackupEngine;
+  generation: Result<string | null, unknown>;
+} {
+  let engine: BackupEngine | undefined;
+  let classificationFailed = false;
+  try {
+    const generations = readUpdateDatabaseGenerations([pathname], (imagePath, sourcePath) => {
+      try {
+        engine = readBackupEngineImage(imagePath, sourcePath);
+      } catch (error) {
+        classificationFailed = true;
+        throw error;
+      }
+    });
+    return { engine, generation: ok(generations[pathname]!) };
+  } catch (error) {
+    if (classificationFailed) {
+      throw error;
+    }
+    // The coherent private image already established the engine. A later generation
+    // failure removes rollback authority, but does not require another engine image.
+    return { engine, generation: err(error) };
+  }
+}
+
+export async function readUpdatePostgresDatabaseGenerations(
+  paths: readonly string[],
+  pluginOwners?: DatabasePortPluginOwners,
+): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  if (paths.length) {
+    const { fingerprintPostgresBackup } = await import("../snapshot/database-backup.js");
+    const { createConfigIO } = await import("../config/io.js");
+    const { config } = await createConfigIO({
+      observe: false,
+      pluginValidation: "core-only",
+      shellEnvFallback: "defer",
+    }).readConfigFileSnapshot();
+    for (const pathname of paths) {
+      result[pathname] = await fingerprintPostgresBackup(pathname, config, pluginOwners);
+    }
+  }
+  return result;
+}
 
 export async function readUpdatePhysicalDatabaseGenerations(
   paths: readonly string[],
   pluginOwners?: DatabasePortPluginOwners,
 ) {
-  return (await readUpdatePhysicalDatabaseGenerationPair(paths, pluginOwners)).committed;
+  const result: Record<string, string | null> = {};
+  const postgres: string[] = [];
+  for (const pathname of paths) {
+    const observation = readUpdatePhysicalDatabaseObservation(pathname);
+    if (!observation.generation.ok) {
+      throw observation.generation.error;
+    }
+    result[pathname] = observation.generation.value;
+    if (observation.engine?.engine === "postgres") {
+      postgres.push(pathname);
+    }
+  }
+  return Object.assign(result, await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners));
 }
 
 export async function readUpdatePhysicalDatabaseGenerationPair(
@@ -20,22 +82,9 @@ export async function readUpdatePhysicalDatabaseGenerationPair(
       postgres.push(sourcePath);
     }
   });
-  if (postgres.length) {
-    const { fingerprintPostgresBackup } = await import("../snapshot/database-backup.js");
-    const { createConfigIO } = await import("../config/io.js");
-    const { config } = await createConfigIO({
-      observe: false,
-      pluginValidation: "core-only",
-      shellEnvFallback: "defer",
-    }).readConfigFileSnapshot();
-    for (const pathname of postgres) {
-      result.committed[pathname] = result.physical[pathname] = await fingerprintPostgresBackup(
-        pathname,
-        config,
-        pluginOwners,
-      );
-    }
-  }
+  const fingerprints = await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners);
+  Object.assign(result.committed, fingerprints);
+  Object.assign(result.physical, fingerprints);
   return result;
 }
 

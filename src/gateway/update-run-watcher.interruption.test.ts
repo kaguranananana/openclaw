@@ -153,7 +153,6 @@ afterEach(async () => {
   await lifecycle.stop();
   watcher = undefined;
   await scheduler.stop();
-  // A periodic WAL inspection may still be in flight; stop maintenance before closing.
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
