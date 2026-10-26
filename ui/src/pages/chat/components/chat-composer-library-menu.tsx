@@ -1,5 +1,5 @@
 import { Icon } from "../../../components/solid/icon.tsx";
-import type { MenuEntry } from "../../../components/solid/menu.tsx";
+import type { MenuItem } from "../../../components/solid/menu.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerLibraryProps } from "../composer-library-session.ts";
@@ -14,7 +14,9 @@ import type { ChatComposerPlusMenuView } from "./chat-composer-plus-menu.types.t
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
-function libraryStatus(library: ComposerLibraryProps): MenuEntry[] {
+type LibraryMenuEntry = MenuItem | ReturnType<typeof renderCapabilityMenuState>;
+
+function libraryStatus(library: ComposerLibraryProps): LibraryMenuEntry[] {
   if (library.error)
     return [
       renderCapabilityMenuState("library-error", library.error, "alert"),
@@ -34,14 +36,14 @@ function libraryStatus(library: ComposerLibraryProps): MenuEntry[] {
 export function composerLibraryMenuItems(
   library: ComposerLibraryProps | undefined,
   skillId?: string,
-): MenuEntry[] {
+): LibraryMenuEntry[] {
   if (!library) return [];
   const busy = library.busy || library.loading;
   const session = library.result?.session;
   if (skillId) {
     const pin = session?.selections.find((entry) => entry.skillId === skillId);
     const current = library.result?.entries.find((entry) => entry.skillId === skillId);
-    const entries: MenuEntry[] = [
+    const entries: LibraryMenuEntry[] = [
       renderBackRow(pin?.slug ?? t("chat.composer.menu.skills")),
       menuDivider("library-header-divider"),
       ...libraryStatus(library),
@@ -97,7 +99,7 @@ export function composerLibraryMenuItems(
   }
   return [
     ...libraryStatus(library),
-    ...(session?.selections ?? []).map((pin): MenuEntry => ({
+    ...(session?.selections ?? []).map((pin): MenuItem => ({
       id: `library-selected:${pin.skillId}`,
       label: `${pin.slug} ${pin.ownerLabel}`,
       class: "agent-chat__capability-menu-item",
@@ -122,14 +124,16 @@ export function composerLibraryMenuItems(
             details: menuChevron(),
             disabled: busy || !library.canWrite,
             closeOnSelect: false,
-          } satisfies MenuEntry,
+          } satisfies MenuItem,
         ]
       : []),
   ];
 }
 
-export function composerLibraryAddItems(library: ComposerLibraryProps | undefined): MenuEntry[] {
-  const entries: MenuEntry[] = [
+export function composerLibraryAddItems(
+  library: ComposerLibraryProps | undefined,
+): LibraryMenuEntry[] {
+  const entries: LibraryMenuEntry[] = [
     renderBackRow(t("chat.composer.menu.addFromLibraries")),
     menuDivider("library-add-header"),
   ];

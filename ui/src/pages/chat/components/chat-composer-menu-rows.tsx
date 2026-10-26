@@ -3,7 +3,7 @@ import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
 import "../../../styles/settings-native-controls.css";
 
-export function menuDivider(id: string): MenuEntry {
+export function menuDivider(id: string): Extract<MenuEntry, { kind: "content" }> {
   return {
     kind: "content",
     id,
@@ -14,7 +14,7 @@ export function renderCapabilityMenuState(
   id: string,
   message: JSX.Element,
   role?: "status" | "alert",
-): MenuEntry {
+): Extract<MenuEntry, { kind: "content" }> {
   return {
     kind: "content",
     id,
