@@ -23,6 +23,10 @@ import {
   type AuthProfileAuthorization,
 } from "../../auth-profiles/authorization.js";
 import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
+import {
+  getScopedSharedAuthStore,
+  isEnvOnlyAuthProfileRuntime,
+} from "../../auth-profiles/runtime-scope.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import { classifyFailoverReason } from "../../failover/classify.js";
@@ -556,8 +560,9 @@ export function createEmbeddedRunAuthController(params: {
     };
     // Keep the canonical account's authorization, not just its rotating bearer.
     // Its existing writer publications retire this handle on reconnect/removal.
+    const requestAuthSupported = !isEnvOnlyAuthProfileRuntime() && !getScopedSharedAuthStore();
     const authorization =
-      apiKeyInfo.mode === "oauth" && profileId && selected?.type === "oauth"
+      requestAuthSupported && apiKeyInfo.mode === "oauth" && profileId && selected?.type === "oauth"
         ? await captureAuthProfileAuthorization({
             profileId,
             agentDir: params.agentDir,
@@ -609,7 +614,7 @@ export function createEmbeddedRunAuthController(params: {
     }
     state.lastProfileId = profileId;
     const requestAuth =
-      apiKeyInfo.mode === "oauth" && profileId && selected?.type === "oauth"
+      authorization && apiKeyInfo.mode === "oauth" && profileId && selected?.type === "oauth"
         ? createEmbeddedRequestAuth({
             model: runtimeModel,
             selected,

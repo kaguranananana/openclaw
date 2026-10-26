@@ -650,9 +650,13 @@ also prevents returning credentials. An already-claimed OAuth refresh retains
 its existing independent settlement owner.
 
 This is additive: older hosts, other completion entrypoints, and calls without a
-selected stored OAuth profile may omit it. Absence retains the existing static
-`apiKey` behavior, not a guarantee of renewal during an attempt. Static API keys
-are unchanged. Account-less legacy OAuth credentials may keep the same refresh
+selected stored OAuth profile may omit it. Bounded auth views such as
+`openclaw agent exec` with state-database shared auth, and env-only scopes, omit
+it because those views cannot supply canonical account authorization. Their
+existing local-credential and shared-OAuth exclusion rules remain unchanged.
+Absence retains the existing static `apiKey` behavior, not a guarantee of renewal
+during an attempt. Static API keys are unchanged. Account-less legacy OAuth
+credentials may keep the same refresh
 grant; a rotated grant without account identity fails closed rather than assuming
 it belongs to the same account. This capability does not retry HTTP 401, replay
 conversations, or transfer refresh grants to a transport.
