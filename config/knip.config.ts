@@ -186,6 +186,7 @@ const repositoryScriptEntries = [
   "scripts/perf/approval-replay-burst-measure.ts!",
   "scripts/perf/channels-status-inventory.ts!",
   "scripts/perf/extension-handler-lookup-measure.ts!",
+  "scripts/perf/knowledge-git-transactions.ts!",
   "scripts/perf/reply-tool-authority-measure.ts!",
   "scripts/perf/select-environment-scale.ts!",
   "scripts/perf/session-archive-staging-measure.ts!",
