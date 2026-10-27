@@ -67,6 +67,12 @@ describe("materializeSkill display name", () => {
     expect(skill.displayName).toBe("Short Description");
   });
 
+  it("does not treat an indented code block as a heading", () => {
+    const skill = materialize("\n    # Install prerequisites\n    npm install\n", "guide");
+
+    expect(skill.displayName).toBe("Guide");
+  });
+
   it("falls back to the humanized frontmatter name without a body heading", () => {
     const skill = materialize(
       "---\nname: guide\ndescription: No heading here.\n---\nPlain body prose only.\n",

@@ -20,7 +20,7 @@ function resolveSkillDisplayName(content: string, fallbackName: string): string 
   // Only a heading that opens the body titles the skill; a later heading can
   // belong to embedded shared boilerplate, while the frontmatter name stays the
   // skill identity per the Agent Skills spec.
-  const [firstLine = ""] = body.trimStart().split("\n", 1);
+  const [firstLine = ""] = body.replace(/^(?:[ \t]*\r?\n)*/u, "").split("\n", 1);
   const heading = SKILL_TITLE_HEADING.exec(firstLine)?.[1]?.trim();
   const displayName = heading || humanizeSkillIdentifier(fallbackName) || fallbackName;
   // A captured heading can retain the whole skill body in metadata caches.
