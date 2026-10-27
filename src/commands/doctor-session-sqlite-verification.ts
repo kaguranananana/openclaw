@@ -59,6 +59,9 @@ export function createRecoveryDestinationVerifier(stateDir: string) {
       }
       // Even a read-only SQLite connection can create WAL/SHM files. Establish the baseline
       // after owner inspection closes it; later checks only stat, never reopen or hash the DB.
+      // Sidecar mtimeNs/ctimeNs are excluded from the later comparison: every SQLite open —
+      // including this cleanup's own read-only connections — moves them, so comparing them
+      // fails the apply against itself. Replacement still shows in dev/ino/size.
       const files = paths.map((file) =>
         fs.lstatSync(file, { bigint: true, throwIfNoEntry: false }),
       );
@@ -70,9 +73,10 @@ export function createRecoveryDestinationVerifier(stateDir: string) {
         files.some((file) => file && (!file.isFile() || file.nlink !== 1n)) ||
         (expected &&
           files.some((file, index) =>
-            (["dev", "ino", "ctimeNs", "mtimeNs", "size"] as const).some(
-              (key) => file?.[key] !== expected.files[index]?.[key],
-            ),
+            (index === 0
+              ? (["dev", "ino", "ctimeNs", "mtimeNs", "size"] as const)
+              : (["dev", "ino", "size"] as const)
+            ).some((key) => file?.[key] !== expected.files[index]?.[key]),
           ))
       ) {
         throw new Error("Recovery destination database changed; preview cleanup again.");
